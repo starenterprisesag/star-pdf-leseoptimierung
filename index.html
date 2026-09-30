@@ -1,0 +1,913 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>STAR PDF-Leseoptimierung</title>
+<style>
+*{box-sizing:border-box}
+:root{--navy:#172c55;--ink:#172033;--muted:#667084;--line:#dfe4ea;--bg:#f3f5f7;--ok:#215c2c}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--ink)}
+.shell{max-width:780px;margin:0 auto;padding:32px 18px 48px}
+.header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}
+h1{font-size:26px;line-height:1.15;margin:0 0 8px}
+.lead{font-size:15px;line-height:1.55;color:var(--muted);margin:0;max-width:650px}
+.badge{flex:0 0 auto;font-size:12px;background:#edf7ef;color:var(--ok);padding:6px 10px;border-radius:999px;white-space:nowrap}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px;box-shadow:0 2px 8px rgba(23,32,51,.04)}
+.dropzone{border:2px dashed #c7ced8;border-radius:12px;padding:30px 18px;text-align:center;background:#fafbfd;transition:.15s ease;cursor:pointer}
+.dropzone:hover,.dropzone.dragover{border-color:var(--navy);background:#f5f7fb}
+.drop-title{font-weight:700;font-size:16px;margin-bottom:6px}
+.drop-sub{font-size:13px;color:var(--muted);margin-bottom:14px}
+.filebtn{display:inline-block;border:1px solid #c8cfd8;background:#fff;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer}
+input[type=file]{display:none}
+.selected{display:none;margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:#fff}
+.selected.show{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.filemeta{min-width:0}
+.filelabel{font-size:12px;color:var(--muted);margin-bottom:3px}
+.filename{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px}
+.filesize{font-size:12px;color:var(--muted);margin-top:3px}
+.actions{margin-top:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+button{border:1px solid #c8cfd8;background:#fff;border-radius:8px;padding:11px 15px;font-weight:700;cursor:pointer}
+button.primary{background:var(--navy);color:#fff;border-color:var(--navy)}
+button:disabled{opacity:.45;cursor:default}
+#status{font-size:13px;color:var(--muted)}
+.note{margin-top:16px;font-size:13px;line-height:1.5;color:var(--muted)}
+.note strong{color:var(--ink)}
+.result{display:none}
+.error{color:#a32121!important}
+@media (max-width:640px){
+  .shell{padding:22px 12px 34px}
+  .header{display:block}
+  .badge{display:inline-block;margin-top:10px}
+  .card{padding:16px}
+  .filename{max-width:72vw}
+  .actions{align-items:stretch}
+  button.primary{width:100%}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="header">
+    <div>
+      <h1>STAR PDF-Leseoptimierung</h1>
+      <p class="lead">
+        Macht A4-Rechnungen im Hochformat leichter lesbar: Die PDF wird auf A4-Querformatseiten aufgeteilt und der Inhalt dadurch deutlich grösser dargestellt – ohne Kopieren, Einfügen oder manuelles Neuformatieren.
+      </p>
+    </div>
+    <span class="badge">lokal im Browser · keine KI · kein Upload</span>
+  </div>
+
+  <div class="card">
+    <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="PDF auswählen oder hierher ziehen">
+      <div class="drop-title">PDF hierher ziehen</div>
+      <div class="drop-sub">oder eine Datei auf deinem Gerät auswählen</div>
+      <label class="filebtn" for="file">PDF auswählen</label>
+      <input id="file" type="file" accept="application/pdf,.pdf">
+    </div>
+
+    <div id="selected" class="selected">
+      <div class="filemeta">
+        <div class="filelabel">Ausgewählte Datei</div>
+        <div id="filename" class="filename"></div>
+        <div id="filesize" class="filesize"></div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="make" class="primary" disabled>Umwandeln &amp; herunterladen</button>
+      <span id="status">Noch keine PDF ausgewählt</span>
+    </div>
+
+    <div class="note">
+      <strong>Hinweis:</strong> Die ursprüngliche Seitennummerierung entfällt bei der Umwandlung. Das Layout kann dadurch etwas weniger kompakt wirken – dafür ist die Rechnung mit sehr wenig Aufwand deutlich grösser und angenehmer zu lesen.
+    </div>
+
+    <div id="result" class="result"><a id="download" href="#"></a></div>
+  </div>
+</div>
+
+<script type="module">
+
+import { PDFDocument } from "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm";
+import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+
+const fileEl=document.getElementById("file");
+const makeBtn=document.getElementById("make");
+const status=document.getElementById("status");
+const result=document.getElementById("result");
+const download=document.getElementById("download");
+const dropzone=document.getElementById("dropzone");
+const selected=document.getElementById("selected");
+const filename=document.getElementById("filename");
+const filesize=document.getElementById("filesize");
+
+let chosen=null;
+let oldUrl=null;
+
+function formatBytes(bytes){
+  if(!Number.isFinite(bytes)) return "";
+  if(bytes<1024) return `${bytes} B`;
+  if(bytes<1024*1024) return `${(bytes/1024).toFixed(1)} KB`;
+  return `${(bytes/(1024*1024)).toFixed(1)} MB`;
+}
+
+function setChosen(file){
+  status.classList.remove("error");
+  result.style.display="none";
+
+  if(!file){
+    chosen=null;
+    makeBtn.disabled=true;
+    selected.classList.remove("show");
+    filename.textContent="";
+    filesize.textContent="";
+    status.textContent="Noch keine PDF ausgewählt";
+    return;
+  }
+
+  const isPdf=file.type==="application/pdf" || /\.pdf$/i.test(file.name||"");
+  if(!isPdf){
+    chosen=null;
+    makeBtn.disabled=true;
+    selected.classList.remove("show");
+    status.classList.add("error");
+    status.textContent="Bitte eine PDF-Datei auswählen.";
+    return;
+  }
+
+  chosen=file;
+  makeBtn.disabled=false;
+  filename.textContent=file.name;
+  filesize.textContent=formatBytes(file.size);
+  selected.classList.add("show");
+  status.textContent="Bereit zum Umwandeln";
+}
+
+fileEl.addEventListener("change",()=>setChosen(fileEl.files?.[0]||null));
+
+dropzone.addEventListener("click",e=>{
+  if(e.target.closest("label")) return;
+  fileEl.click();
+});
+dropzone.addEventListener("keydown",e=>{
+  if(e.key==="Enter"||e.key===" "){e.preventDefault();fileEl.click()}
+});
+["dragenter","dragover"].forEach(type=>dropzone.addEventListener(type,e=>{
+  e.preventDefault();e.stopPropagation();dropzone.classList.add("dragover");
+}));
+["dragleave","drop"].forEach(type=>dropzone.addEventListener(type,e=>{
+  e.preventDefault();e.stopPropagation();dropzone.classList.remove("dragover");
+}));
+dropzone.addEventListener("drop",e=>{
+  const f=e.dataTransfer?.files?.[0]||null;
+  setChosen(f);
+});
+
+const A4L_W=841.89;
+const A4L_H=595.28;
+const TARGET_SCALE=1.30;
+const ANALYSIS_SCALE=2.0;
+const PIXEL_THRESHOLD=250;
+const OUTER_PAD=8.0;
+
+function isRuleCluster(c,pageW){
+  return c.height<=2.5 && c.width>pageW*0.55;
+}
+
+function buildBandsFromRows(rowActive,rowMinX,rowMaxX,scale){
+  const runs=[];
+  let start=null;
+
+  for(let y=0;y<rowActive.length;y++){
+    if(rowActive[y] && start===null) start=y;
+    if(!rowActive[y] && start!==null){
+      runs.push([start,y-1]);
+      start=null;
+    }
+  }
+  if(start!==null) runs.push([start,rowActive.length-1]);
+
+  // Nur Mini-Lücken von maximal ca. 0.5 pt zusammenziehen.
+  const mergeGapPx=Math.max(1,Math.round(0.5*scale));
+  const merged=[];
+  for(const r of runs){
+    if(!merged.length || r[0]-merged[merged.length-1][1]-1>mergeGapPx){
+      merged.push([...r]);
+    }else{
+      merged[merged.length-1][1]=r[1];
+    }
+  }
+
+  const bands=[];
+  for(const [y0,y1] of merged){
+    let minX=Infinity,maxX=-Infinity,activeRows=0;
+    for(let y=y0;y<=y1;y++){
+      if(rowActive[y]){
+        activeRows++;
+        if(rowMinX[y]<minX) minX=rowMinX[y];
+        if(rowMaxX[y]>maxX) maxX=rowMaxX[y];
+      }
+    }
+    if(!Number.isFinite(minX)||!Number.isFinite(maxX)) continue;
+    bands.push({
+      top:y0/scale,
+      bottom:(y1+1)/scale,
+      height:(y1-y0+1)/scale,
+      x0:minX/scale,
+      x1:(maxX+1)/scale,
+      width:(maxX-minX+1)/scale,
+      activeRows
+    });
+  }
+  return bands;
+}
+
+function buildClusters(bands,scale,mergeGapPt=10){
+  const clusters=[];
+
+  for(const b of bands){
+    if(!clusters.length || b.top-clusters[clusters.length-1].bottom>mergeGapPt){
+      clusters.push({
+        top:b.top,bottom:b.bottom,height:b.height,
+        x0:b.x0,x1:b.x1,width:b.width,
+        activeRows:b.activeRows,
+        members:[b]
+      });
+    }else{
+      const c=clusters[clusters.length-1];
+      c.bottom=b.bottom;
+      c.height=c.bottom-c.top;
+      c.x0=Math.min(c.x0,b.x0);
+      c.x1=Math.max(c.x1,b.x1);
+      c.width=c.x1-c.x0;
+      c.activeRows+=b.activeRows;
+      c.members.push(b);
+    }
+  }
+
+  for(let i=0;i<clusters.length;i++){
+    clusters[i].gapBefore=i===0?null:clusters[i].top-clusters[i-1].bottom;
+    clusters[i].gapAfter=i===clusters.length-1?null:clusters[i+1].top-clusters[i].bottom;
+    const spanPx=Math.max(1,Math.round(clusters[i].height*scale));
+    clusters[i].rowCoverage=Math.min(1,clusters[i].activeRows/spanPx);
+  }
+
+  return clusters;
+}
+
+function identifyPageParts(clusters,pageH,pageW){
+  const pageNumber=new Set();
+
+  // Alte SKY-Seitenzahl: kleiner, isolierter Block ganz unten.
+  // Wir entfernen nur diesen Block aus dem Grossdruck.
+  for(let i=0;i<clusters.length;i++){
+    const c=clusters[i];
+    if(c.top>pageH*0.94 && c.height<20) pageNumber.add(i);
+  }
+
+  const inds=[];
+  for(let i=0;i<clusters.length;i++) if(!pageNumber.has(i)) inds.push(i);
+
+  const footer=new Set();
+  if(inds.length){
+    // Isolierter Firmen-/Logo-Footer weit unterhalb des eigentlichen Inhalts.
+    // Er wird NICHT gelöscht, sondern später als Original-Ausschnitt an die
+    // letzte Grossdruckseite derselben Originalseite angehängt.
+    const group=[inds[inds.length-1]];
+    let j=inds.length-2;
+
+    while(j>=0){
+      const prev=clusters[inds[j]];
+      const first=clusters[group[0]];
+      if(first.top-prev.bottom<=22){
+        group.unshift(inds[j]);
+        j--;
+      }else{
+        break;
+      }
+    }
+
+    const top=clusters[group[0]].top;
+    const bottom=clusters[group[group.length-1]].bottom;
+    const groupHeight=bottom-top;
+    const prevGap=j>=0 ? top-clusters[inds[j]].bottom : top;
+    const maxWidth=Math.max(...group.map(i=>clusters[i].width));
+    const hasRule=group.some(i=>isRuleCluster(clusters[i],pageW));
+    const footerish=maxWidth>pageW*0.55 || group.length>=2 || hasRule;
+
+    if(top>pageH*0.76 && groupHeight<140 && prevGap>70 && footerish){
+      for(const i of group) footer.add(i);
+    }
+  }
+
+  return {
+    pageNumber,
+    footer,
+    ignored:new Set([...pageNumber,...footer])
+  };
+}
+function identifyTransfer(page,nextPage){
+  const inds=[];
+  for(let i=0;i<page.clusters.length;i++){
+    if(!page.ignored.has(i)) inds.push(i);
+  }
+  if(!inds.length) return null;
+
+  let lastIdx=inds[inds.length-1];
+  const last=page.clusters[lastIdx];
+
+  if(isRuleCluster(last,page.W)) return null;
+
+  const candidate=
+    last.top>page.H*0.65 &&
+    last.height<=30 &&
+    last.width<page.W*0.45 &&
+    (last.gapBefore||0)>=8 &&
+    (last.gapBefore||0)<=70 &&
+    last.members.length<=3;
+
+  if(!candidate) return null;
+
+  const nextInds=[];
+  for(let i=0;i<nextPage.clusters.length;i++){
+    if(!nextPage.ignored.has(i)) nextInds.push(i);
+  }
+
+  let major=null;
+  for(const idx of nextInds.slice(0,5)){
+    const c=nextPage.clusters[idx];
+    if(c.top>nextPage.H*0.55) break;
+    if(c.height>=100 || c.width>=nextPage.W*0.72){
+      major=c;
+      break;
+    }
+  }
+
+  if(!major) return null;
+
+  return {clusterIndex:lastIdx,targetPage:nextPage.index};
+}
+
+function protectedIntervals(page,includedBands,ignoredClusters){
+  const intervals=[];
+
+  // Dichte, durchgehende Grafik-/Box-Blöcke: niemals darin schneiden.
+  for(let i=0;i<page.clusters.length;i++){
+    if(ignoredClusters.has(i)) continue;
+    const c=page.clusters[i];
+    if(
+      c.height>70 &&
+      c.width>page.W*0.70 &&
+      c.rowCoverage>0.94
+    ){
+      intervals.push({lo:c.top-1,hi:c.bottom+1,type:"dense"});
+    }
+  }
+
+  // Kurzer Titel / Untertitel + nachfolgender Inhalt:
+  // Trennlinien dürfen dazwischen nicht liegen. Horizontale Regeln werden übersprungen.
+  const inds=[];
+  for(let i=0;i<page.clusters.length;i++){
+    if(!ignoredClusters.has(i)) inds.push(i);
+  }
+
+  for(let pos=0;pos<inds.length-1;pos++){
+    const c=page.clusters[inds[pos]];
+    if(isRuleCluster(c,page.W)) continue;
+    if(!(c.height<=36 && c.width<page.W*0.86)) continue;
+
+    let last=c;
+    let body=null;
+
+    for(let q=pos+1;q<Math.min(inds.length,pos+5);q++){
+      const n=page.clusters[inds[q]];
+      if(n.top-last.bottom>35) break;
+
+      if(isRuleCluster(n,page.W)){
+        last=n;
+        continue;
+      }
+
+      if(n.height<=36 && n.width<page.W*0.86 && body===null){
+        last=n;
+        continue;
+      }
+
+      body=n;
+      break;
+    }
+
+    if(body && body.top-c.bottom<=70){
+      intervals.push({lo:c.bottom-1,hi:body.top+1,type:"heading-chain"});
+    }
+  }
+
+  // Einzelne kurze Titelzeile: auffälliger Abstand davor, kleinerer Abstand danach.
+  for(let i=0;i<includedBands.length-1;i++){
+    const b=includedBands[i];
+    const n=includedBands[i+1];
+
+    if(b.height>14 || b.width>=page.W*0.72) continue;
+
+    const gapBefore=i>0 ? b.top-includedBands[i-1].bottom : 999;
+    const gapAfter=n.top-b.bottom;
+
+    if(
+      gapBefore>=8 &&
+      gapAfter>=1.5 &&
+      gapAfter<=20 &&
+      gapBefore>=gapAfter*1.30
+    ){
+      intervals.push({lo:b.bottom-1,hi:n.top+1,type:"heading-line"});
+    }
+  }
+
+  return intervals;
+}
+
+function bandBelongsToCluster(b,c){
+  const center=(b.top+b.bottom)/2;
+  return center>=c.top-0.5 && center<=c.bottom+0.5;
+}
+
+function planPage(page,transfer){
+  // Bereits querformatige/ungewöhnlich rotierte Seiten nicht schneiden.
+  if(page.W>=page.H){
+    return [{top:0,bottom:page.H,scale:Math.min(1,A4L_W/page.W,A4L_H/page.H)}];
+  }
+
+  const ignored=new Set(page.ignored);
+  if(transfer) ignored.add(transfer.clusterIndex);
+
+  const includedBands=page.bands.filter(b=>{
+    for(const idx of ignored){
+      if(bandBelongsToCluster(b,page.clusters[idx])) return false;
+    }
+    return true;
+  });
+
+  if(!includedBands.length) return [];
+
+  const contentTop=Math.max(0,includedBands[0].top-OUTER_PAD);
+  const contentBottom=Math.min(page.H,includedBands[includedBands.length-1].bottom+OUTER_PAD);
+
+  const widthLimit=A4L_W/page.W;
+  const targetMaxSourceHeight=A4L_H/TARGET_SCALE;
+
+  if(contentBottom-contentTop<=targetMaxSourceHeight){
+    return [{
+      top:contentTop,
+      bottom:contentBottom,
+      scale:Math.min(TARGET_SCALE,widthLimit)
+    }];
+  }
+
+  const protectedRanges=protectedIntervals(page,includedBands,ignored);
+  const candidates=[];
+
+  for(let i=0;i<includedBands.length-1;i++){
+    const a=includedBands[i];
+    const b=includedBands[i+1];
+    const gap=b.top-a.bottom;
+    if(gap<2) continue;
+
+    const y=(a.bottom+b.top)/2;
+    if(protectedRanges.some(r=>y>r.lo && y<r.hi)) continue;
+
+    candidates.push({y,gap});
+  }
+
+  let best=null;
+
+  for(const c of candidates){
+    const h1=c.y-contentTop;
+    const h2=contentBottom-c.y;
+    if(h1<=0||h2<=0) continue;
+
+    const s1=Math.min(TARGET_SCALE,widthLimit,A4L_H/h1);
+    const s2=Math.min(TARGET_SCALE,widthLimit,A4L_H/h2);
+    const minScale=Math.min(s1,s2);
+
+    // Priorität:
+    // 1. möglichst 130 % auf beiden Seiten
+    // 2. keine extrem unausgewogene Aufteilung
+    // 3. lieber eine grössere echte Weissraum-Lücke
+    const balance=-Math.abs(h1-h2)/page.H;
+    const gapScore=Math.min(c.gap,40)/40;
+
+    const score=[minScale,balance,gapScore];
+
+    if(
+      !best ||
+      score[0]>best.score[0]+1e-8 ||
+      (Math.abs(score[0]-best.score[0])<1e-8 && score[1]>best.score[1]+1e-8) ||
+      (Math.abs(score[0]-best.score[0])<1e-8 && Math.abs(score[1]-best.score[1])<1e-8 && score[2]>best.score[2])
+    ){
+      best={...c,score,s1,s2};
+    }
+  }
+
+  // Kein sicherer Schnitt vorhanden: ganze sinnvolle Fläche auf eine Seite.
+  // Das ist absichtlich konservativ – nie Inhalt zerschneiden.
+  if(!best){
+    return [{
+      top:contentTop,
+      bottom:contentBottom,
+      scale:Math.min(TARGET_SCALE,widthLimit,A4L_H/(contentBottom-contentTop))
+    }];
+  }
+
+  return [
+    {top:contentTop,bottom:best.y,scale:best.s1},
+    {top:best.y,bottom:contentBottom,scale:best.s2}
+  ];
+}
+
+function boxForClusterIndices(page,indices,pad=2){
+  const arr=[...indices];
+  if(!arr.length) return null;
+  const cs=arr.map(i=>page.clusters[i]);
+  return {
+    left:Math.max(0,Math.min(...cs.map(c=>c.x0))-pad),
+    right:Math.min(page.W,Math.max(...cs.map(c=>c.x1))+pad),
+    topDownTop:Math.max(0,Math.min(...cs.map(c=>c.top))-pad),
+    topDownBottom:Math.min(page.H,Math.max(...cs.map(c=>c.bottom))+pad)
+  };
+}
+
+function validatePlan(page,segments,transfer){
+  const ignored=new Set(page.ignored);
+  if(transfer) ignored.add(transfer.clusterIndex);
+
+  const included=page.bands.filter(b=>{
+    for(const idx of ignored){
+      if(bandBelongsToCluster(b,page.clusters[idx])) return false;
+    }
+    return true;
+  });
+
+  if(!included.length) return segments.length===0;
+  if(!segments.length) return false;
+
+  // Jede sichtbare Inhaltszeile / Grafikband muss vollständig genau einem
+  // Ausschnitt zugeordnet sein. Kein Band darf angeschnitten werden.
+  for(const b of included){
+    let count=0;
+    for(const s of segments){
+      if(s.top<=b.top+0.01 && s.bottom>=b.bottom-0.01) count++;
+    }
+    if(count!==1) return false;
+  }
+
+  for(let i=0;i<segments.length-1;i++){
+    const y=segments[i].bottom;
+    if(included.some(b=>y>b.top+0.01 && y<b.bottom-0.01)) return false;
+  }
+
+  return true;
+}
+
+function safeFallbackPlan(page,transfer){
+  const ignored=new Set(page.ignored);
+  if(transfer) ignored.add(transfer.clusterIndex);
+
+  const included=page.bands.filter(b=>{
+    for(const idx of ignored){
+      if(bandBelongsToCluster(b,page.clusters[idx])) return false;
+    }
+    return true;
+  });
+
+  if(!included.length) return [];
+
+  const top=Math.max(0,included[0].top-OUTER_PAD);
+  const bottom=Math.min(page.H,included[included.length-1].bottom+OUTER_PAD);
+
+  return [{
+    top,
+    bottom,
+    scale:Math.min(TARGET_SCALE,A4L_W/page.W,A4L_H/(bottom-top)),
+    fallback:true
+  }];
+}
+
+async function analyzePage(pdfPage,index){
+  const viewport=pdfPage.getViewport({scale:1});
+  const analysisViewport=pdfPage.getViewport({scale:ANALYSIS_SCALE});
+
+  const canvas=document.createElement("canvas");
+  canvas.width=Math.ceil(analysisViewport.width);
+  canvas.height=Math.ceil(analysisViewport.height);
+
+  const ctx=canvas.getContext("2d",{alpha:false,willReadFrequently:true});
+  await pdfPage.render({canvasContext:ctx,viewport:analysisViewport}).promise;
+
+  const im=ctx.getImageData(0,0,canvas.width,canvas.height);
+  const d=im.data;
+
+  const rowActive=new Uint8Array(canvas.height);
+  const rowMinX=new Int32Array(canvas.height);
+  const rowMaxX=new Int32Array(canvas.height);
+  rowMinX.fill(canvas.width);
+  rowMaxX.fill(-1);
+
+  for(let y=0;y<canvas.height;y++){
+    const rowOffset=y*canvas.width*4;
+    let any=false;
+    let minX=canvas.width;
+    let maxX=-1;
+
+    for(let x=0;x<canvas.width;x++){
+      const p=rowOffset+x*4;
+      const avg=(d[p]+d[p+1]+d[p+2])/3;
+
+      if(avg<PIXEL_THRESHOLD){
+        any=true;
+        if(x<minX) minX=x;
+        if(x>maxX) maxX=x;
+      }
+    }
+
+    if(any){
+      rowActive[y]=1;
+      rowMinX[y]=minX;
+      rowMaxX[y]=maxX;
+    }
+  }
+
+  const bands=buildBandsFromRows(rowActive,rowMinX,rowMaxX,ANALYSIS_SCALE);
+  const clusters=buildClusters(bands,ANALYSIS_SCALE,10);
+  const parts=identifyPageParts(clusters,viewport.height,viewport.width);
+
+  return {
+    index,
+    W:viewport.width,
+    H:viewport.height,
+    bands,
+    clusters,
+    pageNumber:parts.pageNumber,
+    footer:parts.footer,
+    ignored:parts.ignored
+  };
+}
+
+async function buildPdf(file){
+  const bytes=new Uint8Array(await file.arrayBuffer());
+
+  const source=await PDFDocument.load(bytes,{ignoreEncryption:true});
+  const pdfjs=await pdfjsLib.getDocument({data:bytes.slice()}).promise;
+
+  const infos=[];
+
+  for(let i=0;i<pdfjs.numPages;i++){
+    status.textContent=`Analysiere Originalseite ${i+1} von ${pdfjs.numPages}…`;
+    const p=await pdfjs.getPage(i+1);
+    infos.push(await analyzePage(p,i));
+  }
+
+  const transfers=new Map();
+
+  for(let i=0;i<infos.length-1;i++){
+    const tr=identifyTransfer(infos[i],infos[i+1]);
+    if(tr) transfers.set(i,tr);
+  }
+
+  let fallbackCount=0;
+  const plans=infos.map((info,i)=>{
+    const tr=transfers.get(i);
+    let p=planPage(info,tr);
+    if(!validatePlan(info,p,tr)){
+      p=safeFallbackPlan(info,tr);
+      fallbackCount++;
+    }
+    return p;
+  });
+
+  const out=await PDFDocument.create();
+
+  const targetToSource=new Map();
+  for(const [src,tr] of transfers.entries()){
+    targetToSource.set(tr.targetPage,src);
+  }
+
+  let outputCount=0;
+
+  for(let i=0;i<source.getPageCount();i++){
+    const srcPage=source.getPage(i);
+    const srcSize=srcPage.getSize();
+    const info=infos[i];
+    const segments=plans[i];
+
+    // Rotation / Geometrie stimmt nicht zwischen PDF.js und pdf-lib:
+    // konservativ die ganze Originalseite übernehmen.
+    if(
+      Math.abs(srcSize.width-info.W)>2 ||
+      Math.abs(srcSize.height-info.H)>2
+    ){
+      const page=out.addPage([A4L_W,A4L_H]);
+      const emb=await out.embedPage(srcPage);
+      const fit=Math.min(1,A4L_W/srcSize.width,A4L_H/srcSize.height);
+      const w=srcSize.width*fit;
+      const h=srcSize.height*fit;
+      page.drawPage(emb,{
+        x:(A4L_W-w)/2,
+        y:(A4L_H-h)/2,
+        width:w,
+        height:h
+      });
+      outputCount++;
+      continue;
+    }
+
+    for(let s=0;s<segments.length;s++){
+      const seg=segments[s];
+      const segH=seg.bottom-seg.top;
+
+      const transferFrom=s===0 ? targetToSource.get(i) : undefined;
+      let transferCluster=null;
+
+      if(transferFrom!==undefined){
+        const tr=transfers.get(transferFrom);
+        transferCluster=infos[transferFrom].clusters[tr.clusterIndex];
+      }
+
+      const footerBox=(s===segments.length-1)
+        ? boxForClusterIndices(info,info.footer,2)
+        : null;
+
+      let titleBox=null;
+      let titleHeight=0;
+      let footerHeight=0;
+      const gapSource=8;
+
+      if(transferCluster){
+        const prev=infos[transferFrom];
+        titleBox={
+          left:Math.max(0,transferCluster.x0-4),
+          right:Math.min(prev.W,transferCluster.x1+4),
+          topDownTop:Math.max(0,transferCluster.top-4),
+          topDownBottom:Math.min(prev.H,transferCluster.bottom+4)
+        };
+        titleHeight=titleBox.topDownBottom-titleBox.topDownTop;
+      }
+
+      if(footerBox){
+        footerHeight=footerBox.topDownBottom-footerBox.topDownTop;
+      }
+
+      const extraHeight=
+        titleHeight+
+        footerHeight+
+        (titleBox?gapSource:0)+
+        (footerBox?gapSource:0);
+
+      let fit=Math.min(
+        TARGET_SCALE,
+        A4L_W/info.W,
+        (A4L_H-20)/(segH+extraHeight)
+      );
+
+      // Ohne Zusatzblöcke darf der Hauptausschnitt die volle Seitenhöhe nutzen.
+      if(!titleBox && !footerBox){
+        fit=Math.min(TARGET_SCALE,A4L_W/info.W,A4L_H/segH);
+      }
+
+      const drawW=info.W*fit;
+      const drawH=segH*fit;
+      const x=(A4L_W-drawW)/2;
+
+      const page=out.addPage([A4L_W,A4L_H]);
+
+      let bottomBoundary=10;
+      let topBoundary=A4L_H-10;
+
+      // Footer als ORIGINAL-Ausschnitt am unteren Rand derselben Grossdruckseite.
+      if(footerBox){
+        const footerEmb=await out.embedPage(srcPage,{
+          left:footerBox.left,
+          right:footerBox.right,
+          top:info.H-footerBox.topDownTop,
+          bottom:info.H-footerBox.topDownBottom
+        });
+
+        const fh=footerHeight*fit;
+        const fw=(footerBox.right-footerBox.left)*fit;
+        const fy=10;
+
+        page.drawPage(footerEmb,{
+          x:x+footerBox.left*fit,
+          y:fy,
+          width:fw,
+          height:fh
+        });
+
+        bottomBoundary=fy+fh+gapSource*fit;
+      }
+
+      // Übertragener Titel ebenfalls als ORIGINAL-PDF-Ausschnitt – keine neue Schrift.
+      if(titleBox){
+        const prevPage=source.getPage(transferFrom);
+        const titleEmb=await out.embedPage(prevPage,{
+          left:titleBox.left,
+          right:titleBox.right,
+          top:infos[transferFrom].H-titleBox.topDownTop,
+          bottom:infos[transferFrom].H-titleBox.topDownBottom
+        });
+
+        const th=titleHeight*fit;
+        const tw=(titleBox.right-titleBox.left)*fit;
+        const ty=A4L_H-10-th;
+
+        page.drawPage(titleEmb,{
+          x:x+titleBox.left*fit,
+          y:ty,
+          width:tw,
+          height:th
+        });
+
+        topBoundary=ty-gapSource*fit;
+      }
+
+      const mainY=bottomBoundary+(topBoundary-bottomBoundary-drawH)/2;
+      const mainEmb=await out.embedPage(srcPage,{
+        left:0,
+        right:info.W,
+        top:info.H-seg.top,
+        bottom:info.H-seg.bottom
+      });
+
+      page.drawPage(mainEmb,{
+        x,
+        y:mainY,
+        width:drawW,
+        height:drawH
+      });
+
+      outputCount++;
+    }
+  }
+
+  if(outputCount===0){
+    throw new Error("Die PDF enthält keine druckbaren Seiten.");
+  }
+
+  return {
+    bytes:await out.save(),
+    originalPages:source.getPageCount(),
+    outputPages:outputCount,
+    fallbackCount
+  };
+}
+
+makeBtn.addEventListener("click",async()=>{
+  if(!chosen) return;
+
+  makeBtn.disabled=true;
+  result.style.display="none";
+  status.classList.remove("error");
+  status.textContent="PDF wird umgewandelt …";
+
+  try{
+    const built=await buildPdf(chosen);
+
+    if(oldUrl) URL.revokeObjectURL(oldUrl);
+
+    oldUrl=URL.createObjectURL(
+      new Blob([built.bytes],{type:"application/pdf"})
+    );
+
+    const outputName=
+      (chosen.name.replace(/\.pdf$/i,"")||"Dokument")+"_LESEVERSION.pdf";
+
+    download.href=oldUrl;
+    download.download=outputName;
+
+    // Download direkt nach erfolgreicher Umwandlung starten.
+    const trigger=document.createElement("a");
+    trigger.href=oldUrl;
+    trigger.download=outputName;
+    trigger.style.display="none";
+    document.body.appendChild(trigger);
+    trigger.click();
+    trigger.remove();
+
+    status.textContent=
+      built.fallbackCount
+        ? `Fertig – Download gestartet · ${built.fallbackCount} Seite(n) vorsichtig skaliert`
+        : "Fertig – Download gestartet";
+  }catch(err){
+    console.error(err);
+    status.classList.add("error");
+    status.textContent="Die PDF konnte nicht sicher verarbeitet werden.";
+  }finally{
+    makeBtn.disabled=false;
+  }
+});
+
+</script>
+</body>
+</html>
